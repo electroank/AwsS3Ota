@@ -2,6 +2,44 @@
 
 This repository demonstrates how to perform over-the-air (OTA) firmware updates for an ESP32 using a manifest hosted on an AWS S3 bucket.
 
+## How It Works
+
+The OTA update process follows these steps:
+
+1. **Device checks for updates** - Your ESP32 connects to a manifest URL (JSON file hosted on S3)
+2. **Version comparison** - The device compares the version in the manifest with its current firmware version
+3. **Download decision** - If a newer version is available, the device downloads the firmware binary from the URL specified in the manifest
+4. **Secure download** - The device downloads the firmware over HTTPS using SSL/TLS encryption
+5. **Flash and reboot** - The new firmware is written to the OTA partition, and the device reboots into the new version
+
+```
+┌─────────┐         ┌──────────────┐         ┌─────────────┐
+│  ESP32  │ ───1───>│ manifest.json│ ───2───>│ firmware.bin│
+│ Device  │ <──4────│   (S3 URL)   │ <──3────│  (S3 URL)   │
+└─────────┘         └──────────────┘         └─────────────┘
+     │                                               │
+     └───────────────5. Flash & Reboot──────────────┘
+```
+
+## Why AWS Root CA Certificate?
+
+When your ESP32 downloads files from AWS S3, it uses **HTTPS** (not HTTP) to ensure:
+- **Encryption** - Data cannot be intercepted or read by attackers
+- **Authentication** - You're actually talking to AWS, not an imposter server
+- **Integrity** - The firmware hasn't been tampered with during download
+
+The **AWS Root CA certificate** is used to verify that the SSL/TLS certificate presented by S3 is legitimate. Without it:
+- ❌ Your device could download malicious firmware from a fake server
+- ❌ Attackers could perform man-in-the-middle attacks
+- ❌ Your OTA updates would be insecure
+
+With the certificate:
+- ✅ Your device verifies it's connecting to real AWS servers
+- ✅ All downloads are encrypted end-to-end
+- ✅ Your firmware updates are secure and trustworthy
+
+**The certificate is included in this library** - you just need to include it in your sketch!
+
 ## Prerequisites
 - ESP32 partition scheme that supports OTA (e.g., factory + ota_0 + ota_1). Do not use a single huge app partition.
 - An AWS S3 bucket.
