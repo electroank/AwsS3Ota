@@ -18,7 +18,7 @@ const char* password = "YourWiFiPassword";
 const char* manifestUrl = "https://your-api-id.execute-api.us-east-1.amazonaws.com/prod/firmware";
 
 // ===== CREATE OTA =====
-AwsS3Ota ota;
+AwsOta ota;
 
 void setup() {
   Serial.begin(115200);

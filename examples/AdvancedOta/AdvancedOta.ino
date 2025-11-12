@@ -24,7 +24,7 @@ const char* manifestUrl = "https://your-api-id.execute-api.us-east-1.amazonaws.c
 #define LED_PIN 2  // Built-in LED on most ESP32 boards
 
 // ===== CREATE OTA =====
-AwsS3Ota ota;
+AwsOta ota;
 
 void setup() {
   Serial.begin(115200);

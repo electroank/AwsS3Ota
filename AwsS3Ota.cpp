@@ -13,7 +13,7 @@
 #define MAX_VERSION_LEN 32
 #define MAX_FIRMWARE_URL_LEN 512
 
-AwsS3Ota::AwsS3Ota() {
+AwsOta::AwsOta() {
     // Constructor
 }
 
@@ -21,22 +21,22 @@ AwsS3Ota::AwsS3Ota() {
 // SIMPLE API IMPLEMENTATION
 // ========================================
 
-void AwsS3Ota::begin(const char* manifestUrl, const char* currentVersion, const char* rootCa) {
+void AwsOta::begin(const char* manifestUrl, const char* currentVersion, const char* rootCa) {
     strncpy(_manifestUrl, manifestUrl, sizeof(_manifestUrl) - 1);
     strncpy(_currentVersion, currentVersion, sizeof(_currentVersion) - 1);
     _awsRootCa = rootCa;
     
-    log("AwsS3Ota initialized");
+    log("AwsOta initialized");
     log("Version: %s", _currentVersion);
     log("Manifest URL: %s", _manifestUrl);
 }
 
-void AwsS3Ota::checkOnBoot(int delaySeconds) {
+void AwsOta::checkOnBoot(int delaySeconds) {
     log("Setting up boot-time OTA check (delay: %d seconds)", delaySeconds);
     
     // Create a struct to pass parameters to the task
     struct TaskParams {
-        AwsS3Ota* instance;
+        AwsOta* instance;
         int delay;
     };
     
@@ -52,7 +52,7 @@ void AwsS3Ota::checkOnBoot(int delaySeconds) {
     );
 }
 
-void AwsS3Ota::checkEvery(unsigned long intervalMs) {
+void AwsOta::checkEvery(unsigned long intervalMs) {
     _checkInterval = intervalMs;
     log("Setting up periodic OTA check (every %lu ms)", intervalMs);
     
@@ -66,7 +66,7 @@ void AwsS3Ota::checkEvery(unsigned long intervalMs) {
     );
 }
 
-bool AwsS3Ota::checkNow() {
+bool AwsOta::checkNow() {
     log("Manual OTA check triggered");
     return performOtaUpdate();
 }
@@ -75,21 +75,21 @@ bool AwsS3Ota::checkNow() {
 // CONFIGURATION METHODS
 // ========================================
 
-void AwsS3Ota::setAutoTaskSuspend(bool enabled) {
+void AwsOta::setAutoTaskSuspend(bool enabled) {
     _autoTaskSuspend = enabled;
     log("Auto task suspend: %s", enabled ? "enabled" : "disabled");
 }
 
-void AwsS3Ota::setDebug(bool enabled) {
+void AwsOta::setDebug(bool enabled) {
     _debugMode = enabled;
 }
 
-void AwsS3Ota::setMaxRetries(int retries) {
+void AwsOta::setMaxRetries(int retries) {
     _maxRetries = retries;
     log("Max retries set to: %d", retries);
 }
 
-void AwsS3Ota::setHttpTimeout(int timeoutSeconds) {
+void AwsOta::setHttpTimeout(int timeoutSeconds) {
     _httpTimeout = timeoutSeconds;
     log("HTTP timeout set to: %d seconds", timeoutSeconds);
 }
@@ -98,17 +98,17 @@ void AwsS3Ota::setHttpTimeout(int timeoutSeconds) {
 // CALLBACK SETTERS
 // ========================================
 
-void AwsS3Ota::onStart(OtaEventCallback_t cb) { _cbOnStart = cb; }
-void AwsS3Ota::onProgress(OtaProgressCallback_t cb) { _cbOnProgress = cb; }
-void AwsS3Ota::onComplete(OtaEventCallback_t cb) { _cbOnComplete = cb; }
-void AwsS3Ota::onError(OtaErrorCallback_t cb) { _cbOnError = cb; }
-void AwsS3Ota::onNoUpdate(OtaEventCallback_t cb) { _cbOnNoUpdate = cb; }
+void AwsOta::onStart(OtaEventCallback_t cb) { _cbOnStart = cb; }
+void AwsOta::onProgress(OtaProgressCallback_t cb) { _cbOnProgress = cb; }
+void AwsOta::onComplete(OtaEventCallback_t cb) { _cbOnComplete = cb; }
+void AwsOta::onError(OtaErrorCallback_t cb) { _cbOnError = cb; }
+void AwsOta::onNoUpdate(OtaEventCallback_t cb) { _cbOnNoUpdate = cb; }
 
 // ========================================
 // CORE OTA LOGIC
 // ========================================
 
-bool AwsS3Ota::performOtaUpdate() {
+bool AwsOta::performOtaUpdate() {
     if (_isUpdating) {
         log("OTA already in progress!");
         return false;
@@ -184,7 +184,7 @@ cleanup:
     return success;
 }
 
-bool AwsS3Ota::fetchManifest(char* remoteVersion, size_t versionSize, char* downloadUrl, size_t urlSize) {
+bool AwsOta::fetchManifest(char* remoteVersion, size_t versionSize, char* downloadUrl, size_t urlSize) {
     memset(remoteVersion, 0, versionSize);
     memset(downloadUrl, 0, urlSize);
     
@@ -256,7 +256,7 @@ bool AwsS3Ota::fetchManifest(char* remoteVersion, size_t versionSize, char* down
     return false;
 }
 
-bool AwsS3Ota::downloadAndFlash(const char* downloadUrl) {
+bool AwsOta::downloadAndFlash(const char* downloadUrl) {
     log("Downloading firmware from S3...");
     
     WiFiClientSecure* client = new WiFiClientSecure;
@@ -369,7 +369,7 @@ bool AwsS3Ota::downloadAndFlash(const char* downloadUrl) {
 // AUTOMATIC TASK MANAGEMENT
 // ========================================
 
-void AwsS3Ota::autoSuspendTasks() {
+void AwsOta::autoSuspendTasks() {
     _suspendedTasks.clear();
     
     TaskHandle_t currentTask = xTaskGetCurrentTaskHandle();
@@ -404,7 +404,7 @@ void AwsS3Ota::autoSuspendTasks() {
     log("Suspended %d tasks", _suspendedTasks.size());
 }
 
-void AwsS3Ota::autoResumeTasks() {
+void AwsOta::autoResumeTasks() {
     log("Resuming %d tasks", _suspendedTasks.size());
     
     for (TaskHandle_t task : _suspendedTasks) {
@@ -418,14 +418,14 @@ void AwsS3Ota::autoResumeTasks() {
 // FREERTOS TASK WRAPPERS
 // ========================================
 
-void AwsS3Ota::bootCheckTask(void* parameter) {
+void AwsOta::bootCheckTask(void* parameter) {
     struct TaskParams {
-        AwsS3Ota* instance;
+        AwsOta* instance;
         int delay;
     };
     
     TaskParams* params = (TaskParams*)parameter;
-    AwsS3Ota* ota = params->instance;
+    AwsOta* ota = params->instance;
     int delaySec = params->delay;
     
     delete params;  // Clean up
@@ -448,8 +448,8 @@ void AwsS3Ota::bootCheckTask(void* parameter) {
     vTaskDelete(NULL);
 }
 
-void AwsS3Ota::intervalCheckTask(void* parameter) {
-    AwsS3Ota* ota = (AwsS3Ota*)parameter;
+void AwsOta::intervalCheckTask(void* parameter) {
+    AwsOta* ota = (AwsOta*)parameter;
     
     ota->log("Interval check task started (interval: %lu ms)", ota->_checkInterval);
     
@@ -473,7 +473,7 @@ void AwsS3Ota::intervalCheckTask(void* parameter) {
 // UTILITY FUNCTIONS
 // ========================================
 
-void AwsS3Ota::log(const char* format, ...) {
+void AwsOta::log(const char* format, ...) {
     if (!_debugMode) return;
     
     char buffer[256];

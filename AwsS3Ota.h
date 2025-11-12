@@ -42,7 +42,7 @@ typedef std::function<void(void)> OtaEventCallback_t;
 typedef std::function<void(const char* message)> OtaErrorCallback_t;
 typedef std::function<void(int progress)> OtaProgressCallback_t;
 
-class AwsS3Ota {
+class AwsOta {
 public:
     // ========================================
     // SIMPLE API (Beginner-Friendly)
@@ -51,7 +51,7 @@ public:
     /**
      * @brief Constructor - Creates OTA updater instance
      */
-    AwsS3Ota();
+    AwsOta();
 
     /**
      * @brief Initialize OTA with manifest URL and current version
@@ -61,7 +61,7 @@ public:
      * 
      * @example
      * #include "aws_root_ca.h"
-     * AwsS3Ota ota;
+     * AwsOta ota;
      * ota.begin("https://api.example.com/firmware", "1.0.0", AWS_ROOT_CA);
      */
     void begin(const char* manifestUrl, const char* currentVersion, const char* rootCa);

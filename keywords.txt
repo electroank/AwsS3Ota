@@ -6,7 +6,7 @@
 # Datatypes (KEYWORD1)
 #######################################
 
-AwsS3Ota	KEYWORD1
+AwsOta	KEYWORD1
 
 #######################################
 # Methods and Functions (KEYWORD2)
