@@ -1,18 +1,31 @@
-Arduino Keywords File
+#######################################
+# Syntax Coloring Map For AwsS3Ota
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
 
 AwsS3Ota	KEYWORD1
 
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
 begin	KEYWORD2
-checkAndUpdate	KEYWORD2
-startBootCheckTask	KEYWORD2
-setMaxRetries	KEYWORD2
-setStartupDelay	KEYWORD2
+checkOnBoot	KEYWORD2
+checkEvery	KEYWORD2
+checkNow	KEYWORD2
+setAutoTaskSuspend	KEYWORD2
 setDebug	KEYWORD2
-onCheckStart	KEYWORD2
-onSuspendTasks	KEYWORD2
-onResumeTasks	KEYWORD2
-onOtaStarted	KEYWORD2
-onOtaFinished	KEYWORD2
-onOtaFailed	KEYWORD2
-onOtaUpToDate	KEYWORD2
-onOtaProgress	KEYWORD2
+setMaxRetries	KEYWORD2
+setHttpTimeout	KEYWORD2
+onStart	KEYWORD2
+onProgress	KEYWORD2
+onComplete	KEYWORD2
+onError	KEYWORD2
+onNoUpdate	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################

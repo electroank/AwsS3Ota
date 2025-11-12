@@ -1,1 +1,54 @@
-/donotcommit
+# Private/Testing Files
+donotcommit/
+credentials.h
+config.h
+test/
+
+# Arduino Build Files
+*.hex
+*.elf
+*.bin
+*.eep
+*.lss
+*.map
+*.sym
+*.o
+*.d
+
+# VSCode / PlatformIO
+.vscode/
+.pio/
+.pioenvs/
+.piolibdeps/
+lib/
+.clang_complete
+.gcc-flags.json
+
+# Arduino IDE
+build/
+*.bak
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# Libraries (if using local copies)
+lib_deps/
+
+# IDE specific
+*.workspace
+*.project
+*.cproject
+*.settings/

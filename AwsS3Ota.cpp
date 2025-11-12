@@ -1,224 +1,330 @@
 /**
  * @file AwsS3Ota.cpp
- * @brief Implementation of the AwsS3Ota library.
+ * @brief Simplified OTA implementation - WiFiManager style!
+ * @author Ankan Sarkar
+ * @version 2.0.0
+ * @date 2025
+ * @license MIT
  */
 
 #include "AwsS3Ota.h"
 
 // Buffers for manifest parsing
 #define MAX_VERSION_LEN 32
-#define MAX_FIRMWARE_URL_LEN 256
+#define MAX_FIRMWARE_URL_LEN 512
 
 AwsS3Ota::AwsS3Ota() {
     // Constructor
 }
 
-void AwsS3Ota::begin(const char* apiBaseUrl, const char* firmwareEndpoint, const char* currentVersion, const char* rootCa) {
-    strncpy(_apiBaseUrl, apiBaseUrl, sizeof(_apiBaseUrl) - 1);
-    strncpy(_firmwareEndpoint, firmwareEndpoint, sizeof(_firmwareEndpoint) - 1);
+// ========================================
+// SIMPLE API IMPLEMENTATION
+// ========================================
+
+void AwsS3Ota::begin(const char* manifestUrl, const char* currentVersion, const char* rootCa) {
+    strncpy(_manifestUrl, manifestUrl, sizeof(_manifestUrl) - 1);
     strncpy(_currentVersion, currentVersion, sizeof(_currentVersion) - 1);
     _awsRootCa = rootCa;
+    
+    log("AwsS3Ota initialized");
+    log("Version: %s", _currentVersion);
+    log("Manifest URL: %s", _manifestUrl);
 }
 
-void AwsS3Ota::setMaxRetries(int retries) {
-    _maxRetries = retries;
+void AwsS3Ota::checkOnBoot(int delaySeconds) {
+    log("Setting up boot-time OTA check (delay: %d seconds)", delaySeconds);
+    
+    // Create a struct to pass parameters to the task
+    struct TaskParams {
+        AwsS3Ota* instance;
+        int delay;
+    };
+    
+    TaskParams* params = new TaskParams{this, delaySeconds};
+    
+    xTaskCreate(
+        bootCheckTask,
+        "OTA_Boot",
+        8192,
+        params,
+        1,
+        &_bootCheckTaskHandle
+    );
 }
 
-void AwsS3Ota::setStartupDelay(unsigned long delayMs) {
-    _otaStartupDelay = delayMs;
+void AwsS3Ota::checkEvery(unsigned long intervalMs) {
+    _checkInterval = intervalMs;
+    log("Setting up periodic OTA check (every %lu ms)", intervalMs);
+    
+    xTaskCreate(
+        intervalCheckTask,
+        "OTA_Interval",
+        8192,
+        this,
+        1,
+        &_intervalCheckTaskHandle
+    );
+}
+
+bool AwsS3Ota::checkNow() {
+    log("Manual OTA check triggered");
+    return performOtaUpdate();
+}
+
+// ========================================
+// CONFIGURATION METHODS
+// ========================================
+
+void AwsS3Ota::setAutoTaskSuspend(bool enabled) {
+    _autoTaskSuspend = enabled;
+    log("Auto task suspend: %s", enabled ? "enabled" : "disabled");
 }
 
 void AwsS3Ota::setDebug(bool enabled) {
     _debugMode = enabled;
 }
 
-void AwsS3Ota::log(const char* format, ...) {
-    if (!_debugMode) return;
-    char loc_buf[128];
-    char * temp = loc_buf;
-    va_list arg;
-    va_list copy;
-    va_start(arg, format);
-    va_copy(copy, arg);
-    int len = vsnprintf(temp, sizeof(loc_buf), format, copy);
-    va_end(copy);
-    if (len < 0) {
-        va_end(arg);
-        return;
-    };
-    if (len >= (int)sizeof(loc_buf)) {
-        temp = (char*) malloc(len + 1);
-        if (temp == NULL) {
-            va_end(arg);
-            return;
-        }
-        len = vsnprintf(temp, len + 1, format, arg);
-    }
-    va_end(arg);
-    Serial.print("[OTA] ");
-    Serial.println(temp);
-    if (temp != loc_buf) {
-        free(temp);
-    }
+void AwsS3Ota::setMaxRetries(int retries) {
+    _maxRetries = retries;
+    log("Max retries set to: %d", retries);
 }
 
-// ---- Callback Setters ----
-void AwsS3Ota::onCheckStart(OtaCheckCallback_t cb) { _cbOnCheckStart = cb; }
-void AwsS3Ota::onSuspendTasks(OtaTaskControlCallback_t cb) { _cbOnSuspendTasks = cb; }
-void AwsS3Ota::onResumeTasks(OtaTaskControlCallback_t cb) { _cbOnResumeTasks = cb; }
-void AwsS3Ota::onOtaStarted(OtaEventCallback_t cb) { _cbOnOtaStarted = cb; }
-void AwsS3Ota::onOtaFinished(OtaEventCallback_t cb) { _cbOnOtaFinished = cb; }
-void AwsS3Ota::onOtaFailed(OtaErrorCallback_t cb) { _cbOnOtaFailed = cb; }
-void AwsS3Ota::onOtaUpToDate(OtaEventCallback_t cb) { _cbOnOtaUpToDate = cb; }
-void AwsS3Ota::onOtaProgress(OtaEventCallback_t cb) { _cbOnOtaProgress = cb; }
-
-// ---- Private Helper Methods ----
-
-void AwsS3Ota::buildApiUrl(char* buffer, size_t bufferSize) {
-    snprintf(buffer, bufferSize, "%s%s", _apiBaseUrl, _firmwareEndpoint);
+void AwsS3Ota::setHttpTimeout(int timeoutSeconds) {
+    _httpTimeout = timeoutSeconds;
+    log("HTTP timeout set to: %d seconds", timeoutSeconds);
 }
 
-bool AwsS3Ota::fetchFirmwareManifest(char* remoteVersion, size_t versionSize, char* downloadUrl, size_t urlSize) {
-    memset(remoteVersion, 0, versionSize);
-    memset(downloadUrl, 0, urlSize);
+// ========================================
+// CALLBACK SETTERS
+// ========================================
 
-    if (WiFi.status() != WL_CONNECTED) {
-        log("WiFi not connected");
+void AwsS3Ota::onStart(OtaEventCallback_t cb) { _cbOnStart = cb; }
+void AwsS3Ota::onProgress(OtaProgressCallback_t cb) { _cbOnProgress = cb; }
+void AwsS3Ota::onComplete(OtaEventCallback_t cb) { _cbOnComplete = cb; }
+void AwsS3Ota::onError(OtaErrorCallback_t cb) { _cbOnError = cb; }
+void AwsS3Ota::onNoUpdate(OtaEventCallback_t cb) { _cbOnNoUpdate = cb; }
+
+// ========================================
+// CORE OTA LOGIC
+// ========================================
+
+bool AwsS3Ota::performOtaUpdate() {
+    if (_isUpdating) {
+        log("OTA already in progress!");
         return false;
     }
+    
+    _isUpdating = true;
+    bool success = false;
+    
+    log("=== Starting OTA Update ===");
+    log("Free heap: %d bytes", ESP.getFreeHeap());
+    
+    // Check WiFi
+    if (WiFi.status() != WL_CONNECTED) {
+        log("ERROR: WiFi not connected");
+        if (_cbOnError) _cbOnError("WiFi not connected");
+        _isUpdating = false;
+        return false;
+    }
+    
+    // Auto-suspend tasks if enabled
+    if (_autoTaskSuspend) {
+        log("Auto-suspending all tasks...");
+        autoSuspendTasks();
+        vTaskDelay(pdMS_TO_TICKS(500));  // Give tasks time to suspend
+    }
+    
+    // Notify start
+    if (_cbOnStart) _cbOnStart();
+    
+    // Fetch manifest
+    char remoteVersion[MAX_VERSION_LEN] = {0};
+    char downloadUrl[MAX_FIRMWARE_URL_LEN] = {0};
+    
+    if (!fetchManifest(remoteVersion, sizeof(remoteVersion), downloadUrl, sizeof(downloadUrl))) {
+        log("ERROR: Failed to fetch manifest");
+        if (_cbOnError) _cbOnError("Manifest fetch failed");
+        goto cleanup;
+    }
+    
+    // Compare versions
+    log("Current version: %s", _currentVersion);
+    log("Remote version: %s", remoteVersion);
+    
+    if (strcmp(remoteVersion, _currentVersion) == 0) {
+        log("Firmware is already up-to-date");
+        if (_cbOnNoUpdate) _cbOnNoUpdate();
+        goto cleanup;
+    }
+    
+    log("Update available! %s -> %s", _currentVersion, remoteVersion);
+    
+    // Download and flash
+    if (downloadAndFlash(downloadUrl)) {
+        log("=== OTA Update Successful! ===");
+        if (_cbOnComplete) _cbOnComplete();
+        success = true;
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        ESP.restart();  // Will not return
+    } else {
+        log("ERROR: Download/flash failed");
+        if (_cbOnError) _cbOnError("Download or flash failed");
+    }
+    
+cleanup:
+    // Resume tasks if suspended
+    if (_autoTaskSuspend) {
+        log("Resuming tasks...");
+        autoResumeTasks();
+    }
+    
+    _isUpdating = false;
+    log("=== OTA Update Complete ===");
+    return success;
+}
 
-    char url[MAX_FIRMWARE_URL_LEN];
-    buildApiUrl(url, sizeof(url));
-    log("Checking updates from: %s", url);
-
+bool AwsS3Ota::fetchManifest(char* remoteVersion, size_t versionSize, char* downloadUrl, size_t urlSize) {
+    memset(remoteVersion, 0, versionSize);
+    memset(downloadUrl, 0, urlSize);
+    
+    log("Fetching manifest from: %s", _manifestUrl);
+    
     for (int attempt = 1; attempt <= _maxRetries; attempt++) {
         if (attempt > 1) {
             log("Retry %d/%d", attempt, _maxRetries);
             vTaskDelay(pdMS_TO_TICKS(2000));
         }
-
+        
         WiFiClientSecure client;
         client.setCACert(_awsRootCa);
-
+        client.setTimeout(_httpTimeout);  // Hard timeout
+        
         HTTPClient http;
-        http.begin(client, url);
-        http.setTimeout(15000);
+        http.begin(client, _manifestUrl);
+        http.setTimeout(_httpTimeout * 1000);  // Convert to milliseconds
         http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
         http.setReuse(false);
         http.addHeader("Accept", "application/json");
         http.addHeader("Cache-Control", "no-cache");
         http.addHeader("Connection", "close");
         
+        log("Sending HTTP GET request...");
         int code = http.GET();
-
+        
         if (code != HTTP_CODE_OK) {
-            log("HTTP GET failed, error %d", code);
+            log("HTTP error: %d", code);
             http.end();
             continue;
         }
-
-        String payload = http.getString();
-        log("Manifest response code: %d, Length: %d bytes", code, payload.length());
         
+        String payload = http.getString();
+        log("Response: %d bytes", payload.length());
+        http.end();
+        
+        // Parse JSON
         JsonDocument doc;
         DeserializationError err = deserializeJson(doc, payload);
-        http.end();
-
+        
         if (err) {
-            log("JSON parse failed: %s", err.c_str());
+            log("JSON parse error: %s", err.c_str());
             continue;
         }
-
-        if (!doc["version"].is<const char*>() || !doc["url"].is<const char*>()) {
-            log("Manifest missing 'version' or 'url'");
-            continue;
-        }
-
+        
+        // Extract version and URL
         const char* version = doc["version"];
-        const char* url_str = doc["url"];
-
-        if (!version || !url_str || strlen(version) == 0 || strlen(url_str) == 0) {
-            log("Manifest has empty 'version' or 'url'");
+        const char* url = doc["url"];
+        
+        if (!version || !url || strlen(version) == 0 || strlen(url) == 0) {
+            log("Invalid manifest: missing version or url");
             continue;
         }
-
-        if (strncmp(url_str, "https://", 8) != 0) {
-            log("Invalid URL (not https)");
+        
+        if (strncmp(url, "https://", 8) != 0) {
+            log("Invalid URL: must be HTTPS");
             continue;
         }
-
-        if (strlen(url_str) >= urlSize || strlen(version) >= versionSize) {
-            log("Version or URL string too large for buffer");
-            continue;
-        }
-
+        
         strncpy(remoteVersion, version, versionSize - 1);
-        strncpy(downloadUrl, url_str, urlSize - 1);
-
-        log("Found remote version v%s", remoteVersion);
+        strncpy(downloadUrl, url, urlSize - 1);
+        
+        log("Manifest OK - Version: %s", remoteVersion);
         return true;
     }
-
-    log("Manifest fetch failed after all retries.");
+    
+    log("Manifest fetch failed after %d attempts", _maxRetries);
     return false;
 }
 
-bool AwsS3Ota::performHttpOta(const char* downloadUrl) {
-    if (!downloadUrl || downloadUrl[0] == '\0' || strlen(downloadUrl) < 10) {
-        log("ERROR: Invalid download URL");
-        return false;
-    }
-  
-    WiFiClientSecure *client = new WiFiClientSecure;
+bool AwsS3Ota::downloadAndFlash(const char* downloadUrl) {
+    log("Downloading firmware from S3...");
+    
+    WiFiClientSecure* client = new WiFiClientSecure;
     if (!client) {
-        log("HTTPS client creation failed");
+        log("ERROR: Failed to create HTTPS client");
         return false;
     }
-  
+    
     client->setCACert(_awsRootCa);
-  
+    client->setTimeout(_httpTimeout);  // Hard timeout
+    
     HTTPClient http;
     http.begin(*client, downloadUrl);
-    http.setTimeout(60000);
-  
-    log("Starting firmware download from: %s", downloadUrl);
+    http.setTimeout(_httpTimeout * 1000);  // Convert to milliseconds
+    
     int code = http.GET();
     if (code != HTTP_CODE_OK) {
-        log("HTTP GET failed, error %d", code);
+        log("HTTP error: %d", code);
         http.end();
         delete client;
         return false;
     }
-  
+    
     int contentLength = http.getSize();
     log("Firmware size: %d KB", contentLength / 1024);
-  
-    if (!Update.begin(contentLength > 0 ? contentLength : UPDATE_SIZE_UNKNOWN)) {
-        log("Update.begin failed: %d", Update.getError());
+    
+    if (contentLength <= 0) {
+        log("ERROR: Invalid content length");
         http.end();
         delete client;
         return false;
     }
-  
+    
+    // Begin update
+    if (!Update.begin(contentLength)) {
+        log("ERROR: Update.begin() failed: %d", Update.getError());
+        http.end();
+        delete client;
+        return false;
+    }
+    
+    // Download and write
     WiFiClient* stream = http.getStreamPtr();
     size_t written = 0;
     uint8_t buff[512];
-    int lastProgress = 0;
-  
-    log("Download started...");
-  
-    while (http.connected() && (contentLength > 0 ? written < contentLength : true)) {
-        // Call progress callback
-        if (_cbOnOtaProgress) {
-            _cbOnOtaProgress();
+    int lastProgress = -1;
+    
+    log("Downloading and flashing...");
+    
+    unsigned long startTime = millis();
+    unsigned long timeoutMs = _httpTimeout * 1000;
+    
+    while (http.connected() && written < contentLength) {
+        // Hard timeout check
+        if (millis() - startTime > timeoutMs) {
+            log("ERROR: Hard timeout reached!");
+            Update.abort();
+            http.end();
+            delete client;
+            return false;
         }
-
+        
         size_t available = stream->available();
         if (available) {
             int bytesRead = stream->readBytes(buff, min(available, sizeof(buff)));
             if (bytesRead > 0) {
                 if (Update.write(buff, bytesRead) != bytesRead) {
-                    log("Update.write failed!");
+                    log("ERROR: Update.write() failed");
                     Update.abort();
                     http.end();
                     delete client;
@@ -226,191 +332,156 @@ bool AwsS3Ota::performHttpOta(const char* downloadUrl) {
                 }
                 written += bytesRead;
                 
-                if (contentLength > 0) {
-                    int progress = (written * 100) / contentLength;
-                    if (progress >= lastProgress + 10 && progress <= 100) {
-                        log("Progress: %d%% (%d/%d KB)", progress, written / 1024, contentLength / 1024);
-                        lastProgress = progress;
-                    }
+                // Progress callback
+                int progress = (written * 100) / contentLength;
+                if (progress != lastProgress && progress % 10 == 0) {
+                    log("Progress: %d%%", progress);
+                    if (_cbOnProgress) _cbOnProgress(progress);
+                    lastProgress = progress;
                 }
             }
+            startTime = millis();  // Reset timeout on activity
         }
-        vTaskDelay(pdMS_TO_TICKS(1)); // Yield
+        vTaskDelay(pdMS_TO_TICKS(1));  // Yield
     }
-  
-    log("Download complete, flashing...");
-  
-    if (contentLength > 0 && written != contentLength) {
-        log("Incomplete download: %d/%d bytes", written, contentLength);
-        Update.abort();
-        http.end();
-        delete client;
-        return false;
-    }
-  
-    if (!Update.end() || !Update.isFinished()) {
-        log("Update.end failed: %d", Update.getError());
-        http.end();
-        delete client;
-        return false;
-    }
-  
+    
     http.end();
     delete client;
-    log("Flash update successful.");
+    
+    // Verify
+    if (written != contentLength) {
+        log("ERROR: Incomplete download (%d/%d bytes)", written, contentLength);
+        Update.abort();
+        return false;
+    }
+    
+    // Finalize
+    if (!Update.end(true)) {
+        log("ERROR: Update.end() failed: %d", Update.getError());
+        return false;
+    }
+    
+    log("Flash successful! (%d bytes written)", written);
     return true;
 }
 
-bool AwsS3Ota::checkAndUpdate(bool userInitiated) {
-    log("Preparing for update check...");
+// ========================================
+// AUTOMATIC TASK MANAGEMENT
+// ========================================
 
-    // 1. Check preconditions using callback
-    if (_cbOnCheckStart) {
-        if (!_cbOnCheckStart()) {
-            log("Pre-check callback denied OTA start.");
-            return false;
-        }
-    } else {
-        log("ERROR: onCheckStart callback is not set. Aborting.");
-        return false;
-    }
-
-    if (WiFi.status() != WL_CONNECTED) {
-        log("WiFi not connected. Aborting.");
-        return false;
-    }
-
-    // 2. Suspend other tasks via callback
-    if (_cbOnSuspendTasks) {
-        if (!_cbOnSuspendTasks()) {
-            log("Failed to suspend tasks. Aborting.");
-            return false;
-        }
-    } else {
-        log("ERROR: onSuspendTasks callback is not set. Aborting.");
-        return false;
-    }
-
-    // 3. Signal OTA start
-    if (_cbOnOtaStarted) {
-        _cbOnOtaStarted();
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(1000)); // Give time for tasks to suspend, LEDs to change
-    log("Free heap: %lu KB", (unsigned long)(ESP.getFreeHeap() / 1024));
-
-    char remoteVersion[MAX_VERSION_LEN];
-    char downloadUrl[MAX_FIRMWARE_URL_LEN];
-    bool otaSuccess = false;
-    const char* failureReason = "Unknown error";
-
-    // 4. Fetch Manifest
-    bool manifestSuccess = fetchFirmwareManifest(remoteVersion, sizeof(remoteVersion),
-                                                   downloadUrl, sizeof(downloadUrl));
-
-    if (!manifestSuccess) {
-        failureReason = "Manifest fetch failed";
-    } else if (remoteVersion[0] == '\0' || downloadUrl[0] == '\0') {
-        failureReason = "Empty manifest response";
-    } else if (strcmp(remoteVersion, _currentVersion) == 0) {
-        log("Firmware is already up to date (v%s)", _currentVersion);
-        if (_cbOnOtaUpToDate) {
-            _cbOnOtaUpToDate();
-        }
-        // This is not a failure, just no update
-        otaSuccess = false; // But we don't treat it as a hard error
-        failureReason = nullptr; // Clear failure reason
-    } else {
-        log("Updating v%s -> v%s", _currentVersion, remoteVersion);
-        if (strlen(downloadUrl) < 10 || strncmp(downloadUrl, "https://", 8) != 0) {
-            failureReason = "Invalid download URL in manifest";
-        } else {
-            // 5. Perform Download & Flash
-            if (performHttpOta(downloadUrl)) {
-                otaSuccess = true;
-                failureReason = nullptr; // Success
-            } else {
-                failureReason = "Firmware download or flash failed";
+void AwsS3Ota::autoSuspendTasks() {
+    _suspendedTasks.clear();
+    
+    TaskHandle_t currentTask = xTaskGetCurrentTaskHandle();
+    
+    // Get all task handles
+    UBaseType_t taskCount = uxTaskGetNumberOfTasks();
+    TaskStatus_t* taskStatusArray = (TaskStatus_t*)pvPortMalloc(taskCount * sizeof(TaskStatus_t));
+    
+    if (taskStatusArray != NULL) {
+        taskCount = uxTaskGetSystemState(taskStatusArray, taskCount, NULL);
+        
+        log("Found %d tasks, suspending...", taskCount);
+        
+        for (UBaseType_t i = 0; i < taskCount; i++) {
+            TaskHandle_t taskHandle = taskStatusArray[i].xHandle;
+            
+            // Don't suspend ourselves or IDLE tasks
+            if (taskHandle != currentTask && 
+                strncmp(taskStatusArray[i].pcTaskName, "IDLE", 4) != 0 &&
+                strncmp(taskStatusArray[i].pcTaskName, "OTA_", 4) != 0 &&
+                strncmp(taskStatusArray[i].pcTaskName, "Tmr", 3) != 0) {
+                
+                log("  Suspending: %s", taskStatusArray[i].pcTaskName);
+                vTaskSuspend(taskHandle);
+                _suspendedTasks.push_back(taskHandle);
             }
         }
+        
+        vPortFree(taskStatusArray);
     }
+    
+    log("Suspended %d tasks", _suspendedTasks.size());
+}
 
-    // 6. Handle outcome
-    if (otaSuccess) {
-        log("✓ Success! Restarting...");
-        if (_cbOnOtaFinished) {
-            _cbOnOtaFinished();
-        }
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        ESP.restart();
-    } else {
-        log("✗ Update failed or not needed.");
-        if (failureReason && _cbOnOtaFailed) {
-            _cbOnOtaFailed(failureReason);
-        }
-        // 7. Resume tasks
-        if (_cbOnResumeTasks) {
-            if (!_cbOnResumeTasks()) {
-                log("ERROR: Failed to resume tasks! System may be unstable.");
-            }
-        } else {
-            log("ERROR: onResumeTasks callback is not set. Tasks will not be resumed.");
-        }
+void AwsS3Ota::autoResumeTasks() {
+    log("Resuming %d tasks", _suspendedTasks.size());
+    
+    for (TaskHandle_t task : _suspendedTasks) {
+        vTaskResume(task);
     }
-  
-    return otaSuccess;
+    
+    _suspendedTasks.clear();
 }
 
-// ---- FreeRTOS Task Methods ----
+// ========================================
+// FREERTOS TASK WRAPPERS
+// ========================================
 
-void AwsS3Ota::startBootCheckTask(const char* taskName, uint32_t stackSize, UBaseType_t priority) {
-    log("Starting boot-time OTA check task...");
-    xTaskCreate(
-        otaCheckTaskWrapper,
-        taskName,
-        stackSize,
-        this, // Pass the class instance as the parameter
-        priority,
-        &_otaTaskHandle
-    );
-}
-
-void AwsS3Ota::otaCheckTaskWrapper(void *pvParameters) {
-    // Call the non-static member function
-    ((AwsS3Ota*)pvParameters)->runBootCheck();
-}
-
-void AwsS3Ota::runBootCheck() {
-    log("✓ OTA task started");
-  
-    // Wait for WiFi connection
+void AwsS3Ota::bootCheckTask(void* parameter) {
+    struct TaskParams {
+        AwsS3Ota* instance;
+        int delay;
+    };
+    
+    TaskParams* params = (TaskParams*)parameter;
+    AwsS3Ota* ota = params->instance;
+    int delaySec = params->delay;
+    
+    delete params;  // Clean up
+    
+    ota->log("Boot check task started (delay: %d sec)", delaySec);
+    
+    // Wait for WiFi
     while (WiFi.status() != WL_CONNECTED) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-  
-    // Wait startup delay before checking
-    log("Waiting %lu ms before boot check...", _otaStartupDelay);
-    vTaskDelay(pdMS_TO_TICKS(_otaStartupDelay));
     
-    // Check if OTA is allowed by the main app
-    if (_cbOnCheckStart) {
-        if (!_cbOnCheckStart()) {
-            log("Boot check aborted by onCheckStart callback (e.g., config portal active).");
-            vTaskDelete(NULL); // Delete this task
-            return;
-        }
-    } else {
-        log("ERROR: onCheckStart callback not set. Aborting boot check.");
-        vTaskDelete(NULL);
-        return;
-    }
+    // Wait delay
+    vTaskDelay(pdMS_TO_TICKS(delaySec * 1000));
+    
+    ota->log("Running boot-time OTA check...");
+    ota->performOtaUpdate();
+    
+    ota->log("Boot check task complete, deleting task");
+    ota->_bootCheckTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
 
-    log("Performing boot-time update check...");
+void AwsS3Ota::intervalCheckTask(void* parameter) {
+    AwsS3Ota* ota = (AwsS3Ota*)parameter;
     
-    // This will block the task, but not the main loop
-    (void)checkAndUpdate(false);
-  
-    log("Boot check complete. Task exiting.");
-    _otaTaskHandle = NULL;
-    vTaskDelete(NULL); // Delete this task
+    ota->log("Interval check task started (interval: %lu ms)", ota->_checkInterval);
+    
+    while (true) {
+        // Wait for WiFi
+        while (WiFi.status() != WL_CONNECTED) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
+        
+        // Wait interval
+        vTaskDelay(pdMS_TO_TICKS(ota->_checkInterval));
+        
+        ota->log("Running scheduled OTA check...");
+        ota->performOtaUpdate();
+    }
+    
+    // Never reaches here
+}
+
+// ========================================
+// UTILITY FUNCTIONS
+// ========================================
+
+void AwsS3Ota::log(const char* format, ...) {
+    if (!_debugMode) return;
+    
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    
+    Serial.print("[OTA] ");
+    Serial.println(buffer);
 }
